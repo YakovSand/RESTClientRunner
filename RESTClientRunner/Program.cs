@@ -24,11 +24,11 @@ class Program
             string json = await httpClient.GetStringAsync(collectionUrl);
             if (string.IsNullOrEmpty(json))
             {
-                Console.WriteLine("Failed: response is empty.");
+                Console.WriteLine("Failed: collection response is empty!");
             }
             else
             {
-                Console.WriteLine("Success: response received.");
+                Console.WriteLine("Success: collection received.");
                 var options = new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
@@ -39,66 +39,190 @@ class Program
 
                 Console.WriteLine($"\nCollection: {collection.Info.Name}");
 
-                Console.WriteLine("\nAvailable requests:");
-
-                for (int i = 0; i < collection.Item.Count; i++)
-                {
-                    var r = collection.Item[i].Request;
-                    Console.WriteLine($"{i + 1}. {r.Method} {r.Url.Raw}");
-                }
-
                 bool exit = false;
                 while (!exit)
                 {
-                    Console.WriteLine("\nChoose:");
-                    Console.WriteLine("0 - Run all");
-                    Console.WriteLine("N - Run one request");
+                    Console.WriteLine("\nMenu:");
+                    Console.WriteLine("1 - List requests");
+                    Console.WriteLine("2 - Run a request");
+                    Console.WriteLine("3 - Add new request");
+                    Console.WriteLine("4 - Save collection to JSON");
                     Console.WriteLine("Q - Quit");
-                    Console.Write("Your choice: ");
-
-                    string input = Console.ReadLine() ?? "";
-                    if (string.Equals(input, "Q", StringComparison.OrdinalIgnoreCase))
+                    Console.Write("Choice: ");
+                    string input = Console.ReadLine()?.Trim().ToUpper() ?? "";
+                    switch (input)
                     {
-                        exit = true;
-                        Console.WriteLine("Exiting...");
-                    }
-                    else if (input == "0")
-                    {
-                        foreach (var item in collection.Item)
-                            await ExecuteRequest(item.Request, item.Event);
-                    }
-                    else if (int.TryParse(input, out int index) &&
-                             index > 0 &&
-                             index <= collection.Item.Count)
-                    {
-                        await ExecuteRequest(collection.Item[index - 1].Request, collection.Item[index - 1].Event);
-                    }
-                    else
-                    {
-                        Console.WriteLine("Invalid input.");
+                        case "1":
+                            ListRequests(collection);
+                            break;
+                        case "2":
+                            await RunRequests(collection);
+                            break;
+                        case "3":
+                            AddNewRequest(collection);
+                            break;
+                        case "4":
+                            SaveCollection(collection);
+                            break;
+                        case "Q":
+                            exit = true;
+                            break;
+                        default:
+                            Console.WriteLine("Invalid input.");
+                            break;
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed: {ex.Message}");
+            Console.WriteLine($"Failed to retrieve Postman Collection : {ex.Message}");
         }
     }
 
-    // Load configuration from appsettings.json
-    static void LoadConfiguration()
+    // Choice 1: List all requests in the collection (run-time)
+    static void ListRequests(PostmanCollection collection)
     {
-        string configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        if (collection.Item.Count == 0)
+        {
+            Console.WriteLine("No requests in collection.");
+            return;
+        }
 
-        if (!File.Exists(configPath))
-            throw new FileNotFoundException("Configuration file not found", configPath);
+        Console.WriteLine("\nRequests:");
+        for (int i = 0; i < collection.Item.Count; i++)
+        {
+            var r = collection.Item[i].Request;
+            Console.WriteLine($"{i + 1}. {r.Method} {r.Url.Raw} ({collection.Item[i].Name})");
+        }
+    }
 
-        IConfiguration config = new ConfigurationBuilder()
-            .AddJsonFile(configPath, optional: false, reloadOnChange: true)
-            .Build();
+    // Choice 2: Run a request interactively
+    static async Task RunRequests(PostmanCollection collection)
+    {
+        if (collection.Item.Count == 0)
+        {
+            Console.WriteLine("No requests to run.");
+            return;
+        }
 
-        Settings = config.Get<AppSettings>() ?? new AppSettings();
+        ListRequests(collection);
+        Console.Write("Enter request number to run (0 = all): ");
+        string input = Console.ReadLine() ?? "0";
+
+        if (input == "0")
+        {
+            foreach (var item in collection.Item)
+                await ExecuteRequest(item.Request, item.Event);
+        }
+        else if (int.TryParse(input, out int index) &&
+                 index > 0 && index <= collection.Item.Count)
+        {
+            await ExecuteRequest(collection.Item[index - 1].Request, collection.Item[index - 1].Event);
+        }
+        else
+        {
+            Console.WriteLine("Invalid choice.");
+        }
+    }
+
+    // Chice 3: Add a new request interactively (run-time)
+    static void AddNewRequest(PostmanCollection collection)
+    {
+        Console.Write("Request name: ");
+        string name = Console.ReadLine() ?? "New Request";
+
+        Console.Write("Method (GET/POST/PUT/DELETE): ");
+        string method = Console.ReadLine()?.ToUpper() ?? "GET";
+
+        Console.Write("URL: ");
+        string url = Console.ReadLine() ?? "";
+
+        // Headers
+        var headers = new List<PostmanHeader>();
+        Console.Write("Add headers? (y/n): ");
+        if ((Console.ReadLine()?.Trim().ToLower() ?? "") == "y")
+        {
+            while (true)
+            {
+                Console.Write("Header key (empty to finish): ");
+                string key = Console.ReadLine() ?? "";
+                if (string.IsNullOrWhiteSpace(key)) break;
+                Console.Write("Header value: ");
+                string value = Console.ReadLine() ?? "";
+                headers.Add(new PostmanHeader { Key = key, Value = value });
+            }
+        }
+
+        // Body
+        PostmanBody? body = null;
+        if (method == "POST" || method == "PUT")
+        {
+            Console.WriteLine("Enter request body (empty to skip):");
+            string rawBody = Console.ReadLine() ?? "";
+            if (!string.IsNullOrWhiteSpace(rawBody))
+            {
+                body = new PostmanBody { Raw = rawBody };
+            }
+        }
+
+        // Post-request scripts
+        List<string>? scriptLines = null;
+        Console.Write("Add Post-request tests? (y/n): ");
+        if ((Console.ReadLine()?.Trim().ToLower() ?? "") == "y")
+        {
+            scriptLines = new List<string>();
+            Console.WriteLine("Enter Post-request script lines (empty line to finish):");
+            while (true)
+            {
+                string line = Console.ReadLine() ?? "";
+                if (string.IsNullOrWhiteSpace(line)) break;
+                scriptLines.Add(line);
+            }
+        }
+
+        List<PostmanEvent>? events = null;
+        if (scriptLines != null && scriptLines.Count > 0)
+        {
+            events = new List<PostmanEvent>
+        {
+            new PostmanEvent
+            {
+                Listen = "test",
+                Script = new PostmanScript { Exec = scriptLines }
+            }
+        };
+        }
+
+        var newItem = new PostmanItem
+        {
+            Name = name,
+            Request = new PostmanRequest
+            {
+                Method = method,
+                Url = new PostmanUrl { Raw = url },
+                Header = headers.Count > 0 ? headers : null,
+                Body = body
+            },
+            Event = events
+        };
+
+        collection.Item.Add(newItem);
+        Console.WriteLine($"Request '{name}' added to collection.");
+    }
+
+
+    // Choice 4: Save the Postman collection to a JSON file (run-time)
+    static void SaveCollection(PostmanCollection collection)
+    {
+        Console.Write("Enter file name to save (e.g., collection.json): ");
+        string fileName = Console.ReadLine() ?? "collection.json";
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        string json = JsonSerializer.Serialize(collection, options);
+
+        File.WriteAllText(fileName, json);
+        Console.WriteLine($"Collection saved to {fileName}");
     }
 
     // Execute a single Postman request
@@ -122,15 +246,18 @@ class Program
             {
                 if (ev.Listen == "test" && ev.Script?.Exec != null)
                 {
+                    bool handled = false; // To track if we recognized the assertion
                     Console.WriteLine("\nRunning Post-request assertions:");
                     foreach (var line in ev.Script.Exec)
                     {
                         string trimmed = line.Trim();
+
                         // Simple assertion: pm.response.to.be.ok
                         if (trimmed.Contains("pm.response.to.be.ok"))
                         {
                             bool pass = ((int)response.StatusCode == 200);
                             Console.WriteLine($"Assert Status == 200: " + (pass ? "PASS" : "FAIL"));
+                            handled = true;
                         }
                         else if (trimmed.Contains("pm.expect(pm.response.json()"))
                         {
@@ -150,6 +277,7 @@ class Program
                                             string expected = "newman-sample-github-collection";
                                             bool pass = sourceProp.GetString() == expected;
                                             Console.WriteLine($"Assert args.source == '{expected}': " + (pass ? "PASS" : "FAIL"));
+                                            handled = true;
                                         }
                                     }
                                 }
@@ -160,9 +288,30 @@ class Program
                             }
                         }
                     }
+
+                    if (!handled)
+                    {
+                        Console.WriteLine($"Unsupported assertion!");
+                    }
                 }
             }
-        }
 
+        }
+    }
+
+    // Helpers //
+    // Load configuration from appsettings.json
+    static void LoadConfiguration()
+    {
+        string configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+
+        if (!File.Exists(configPath))
+            throw new FileNotFoundException("Configuration file not found", configPath);
+
+        IConfiguration config = new ConfigurationBuilder()
+            .AddJsonFile(configPath, optional: false, reloadOnChange: true)
+            .Build();
+
+        Settings = config.Get<AppSettings>() ?? new AppSettings();
     }
 }
